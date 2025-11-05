@@ -101,6 +101,9 @@ WHERE
   - Wait classes
   - SQL operations
   - Event timelines
+ 
+![ASH Visualizer Screenshot](wait.png)
+![ASH Visualizer Screenshot](concurrent.png)
 
 ### Step 5: Customize Your View
 - Use the tabs and filters to focus on specific time ranges, SQL IDs, or wait classes.
