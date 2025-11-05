@@ -5,6 +5,7 @@
 ## 1. Overview
 The **ASH Visualizer Tool** is designed to help you analyze Oracle Active Session History (ASH) data visually. It allows you to load, visualize, and explore session activity, wait classes, SQL operations, and more.
 
+![ASH Visualizer Screenshot](ash.png)
 ---
 
 ## 2. Prerequisites
