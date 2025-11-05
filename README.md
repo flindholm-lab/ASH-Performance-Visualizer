@@ -94,6 +94,7 @@ WHERE
 
 ### Step 3: Load Your Data
 - Use the file upload feature in the tool to load your `ash_data.csv` file (and optionally `sql_data.csv`).
+![ASH Visualizer Screenshot](load.png)
 
 ### Step 4: Explore the Visualizations
 - The tool provides interactive charts and tables to explore:
@@ -101,6 +102,7 @@ WHERE
   - Wait classes
   - SQL operations
   - Event timelines
+  - Concurrent users
  
 ![ASH Visualizer Screenshot](wait.png)
 ![ASH Visualizer Screenshot](concurrent.png)
@@ -118,5 +120,5 @@ WHERE
 ---
 
 ## 6. Troubleshooting
-- If data fails to load, ensure your CSV files are formatted correctly.
+- If data fails to load, ensure your CSV files are formatted correctly (, and ; supported).
 - For performance issues, limit the date range in your SQL queries.
