@@ -7,6 +7,20 @@ The **ASH Visualizer** Tool is designed to help you analyze Oracle Active Sessio
 
 The user interface lets you zoom in on a selected time range and display ASH activity during that timeframe.
 
+### Technical Overview of the Standalone HTML File
+
+The `ashoffline.html` file is a **standalone, client-side web application** that requires no server or backend. It is built using modern web technologies:
+
+- **HTML5 & CSS3:** Structures and styles the user interface.
+- **JavaScript (ES6+):** Powers the interactive features and data processing.
+- **Chart.js:** A popular library for rendering interactive charts and graphs.
+- **Papa Parse:** A lightweight library for parsing CSV files directly in the browser.
+- **Tailwind CSS:** A utility-first CSS framework for responsive and customizable UI components.
+- **Date-fns:** A library for handling date and time operations, integrated with Chart.js for time-based visualizations.
+
+The application loads CSV files locally in the browser, processes the data, and renders interactive visualizations. All computations and rendering happen in the browser, ensuring privacy and security since no data is sent to a server.
+
+
 ![ASH Visualizer Screenshot](ash.png)
 ---
 
