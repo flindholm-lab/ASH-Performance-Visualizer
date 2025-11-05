@@ -19,3 +19,35 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+
+========================================
+LICENSE NOTICES FOR INCLUDED LIBRARIES
+========================================
+
+This project includes the following MIT-licensed libraries:
+
+1. Chart.js
+   - Copyright (c) Chart.js Contributors
+   - License: MIT
+   - Source: https://github.com/chartjs/Chart.js/blob/master/LICENSE.md
+
+2. Papa Parse
+   - Copyright (c) Matt Holtz
+   - License: MIT
+   - Source: https://github.com/mholt/PapaParse/blob/master/LICENSE
+
+3. Tailwind CSS
+   - Copyright (c) Tailwind Labs
+   - License: MIT
+   - Source: https://github.com/tailwindlabs/tailwindcss/blob/master/LICENSE
+
+4. Date-fns
+   - Copyright (c) Sasha Koss and Lesha Koss
+   - License: MIT
+   - Source: https://github.com/date-fns/date-fns/blob/master/LICENSE.md
+
+5. Chart.js Adapter for Date-fns
+   - Copyright (c) Chart.js Contributors
+   - License: MIT
+   - Source: https://github.com/chartjs/chartjs-adapter-date-fns/blob/master/LICENSE.md
