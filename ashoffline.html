@@ -1,0 +1,1312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ASH Performance Visualizer</title>
+    <!-- Tailwind CSS CDN (for development only) -->
+    <script src="lib\tailwind.css"></script>
+    <!-- Chart.js and related libraries -->
+    <script src="lib\chart.js"></script>
+    <script src="lib\papaparse.min.js"></script>
+    <script src="lib\chartjs-adapter-date-fns.bundle.min.js"></script>
+    <script>
+        // Use Inter font and set dark theme colors
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                    colors: {
+                        'primary': '#4F46E5', // Indigo
+                        'secondary': '#1F2937', // Dark Gray
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* Custom scrollbar for better dark mode look */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-thumb {
+            background-color: #4F46E5;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #1F2937;
+        }
+        /* Default constraint for chart containers */
+        .chart-container {
+            max-height: 70vh;
+            transition: max-height 0.3s ease-in-out, height 0.3s ease-in-out;
+            height: 400px; /* Default height */
+            position: relative; /* Needed for selection overlay */
+        }
+        /* Expanded state */
+        .chart-container-expanded {
+            height: 85vh !important;
+            max-height: 85vh !important;
+        }
+        .tab-button {
+            @apply px-4 py-2 mr-4 text-sm font-medium border-b-2 cursor-pointer transition duration-150 ease-in-out;
+        }
+        .tab-button:disabled {
+            @apply cursor-not-allowed text-gray-600 border-transparent hover:border-transparent;
+        }
+        /* Crosshair cursor for chart selection */
+        #ashChart {
+            cursor: crosshair;
+        }
+        /* SQL Table Styling */
+        .sql-drill-table th, .sql-drill-table td {
+            padding: 8px 12px;
+        }
+        /* --- Drawer Styles --- */
+        .drawer-container {
+            transition: transform 0.3s ease-out;
+            transform: translateX(100%);
+        }
+        .drawer-container.open {
+            transform: translateX(0);
+        }
+        .backdrop {
+            transition: opacity 0.3s ease-out;
+            opacity: 0;
+            pointer-events: none;
+        }
+        .backdrop.open {
+            opacity: 1;
+            pointer-events: auto;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 font-sans min-h-screen p-4 md:p-8">
+    <div class="max-w-7xl mx-auto">
+        <header class="mb-8">
+            <h1 class="text-4xl font-extrabold text-white mb-2">ASH Performance Visualizer</h1>
+            <p class="text-gray-400">Written by Fredrik Stenén 2025-11-04<br>Upload your ASH CSV file for time-series and top-N analysis.</p>
+        </header>
+        <!-- File Upload Section -->
+        <div class="bg-gray-800 p-6 rounded-xl shadow-lg mb-8 border border-gray-700">
+            <label for="csvFileInput" class="block text-sm font-medium text-gray-300 mb-2">1. Select ASH CSV File (Mandatory)</label>
+            <input type="file" id="csvFileInput" accept=".csv" class="block w-full text-sm text-gray-300 mb-4
+                file:mr-4 file:py-2 file:px-4
+                file:rounded-full file:border-0
+                file:text-sm file:font-semibold
+                file:bg-primary/20 file:text-primary
+                hover:file:bg-primary/30 cursor-pointer
+            ">
+            <label for="sqlFileInput" class="block text-sm font-medium text-gray-300 mb-2">2. Select SQL Metadata CSV File (Optional, format: SQL_ID;SQL_TEXT;ELAPSED_TIME;EXECUTIONS)</label>
+            <input type="file" id="sqlFileInput" accept=".csv" class="block w-full text-sm text-gray-300
+                file:mr-4 file:py-2 file:px-4
+                file:rounded-full file:border-0
+                file:text-sm file:font-semibold
+                file:bg-indigo-300/20 file:text-indigo-300
+                hover:file:bg-indigo-300/30 cursor-pointer
+            ">
+            <p id="statusMessage" class="mt-4 text-sm text-gray-400">ASH Status: Awaiting file. | SQL Metadata: Not loaded.</p>
+        </div>
+        <!-- Analysis Tabs -->
+        <div class="bg-gray-800 p-6 rounded-xl shadow-xl border border-gray-700">
+            <!-- Tab Navigation -->
+            <div id="tab-nav" class="flex flex-wrap border-b border-gray-700 mb-6">
+                <button data-tab="timeline" class="tab-button active-tab mr-4" disabled>Timeline (ASH)</button>
+                <button data-tab="wait-distribution" class="tab-button mr-4" disabled>Wait Distribution </button>
+                <button data-tab="top-sql" class="tab-button mr-4" disabled>Top 25 SQL </button>
+                <button data-tab="top-modules" class="tab-button mr-4" disabled>Top 25 Modules </button>
+                <button data-tab="top-clients" class="tab-button mr-4" disabled>Top 25 Clients</button>
+                <button data-tab="concurrent-users" class="tab-button mr-4" disabled>Concurrent Users</button>
+            </div>
+            <!-- Tab Content Containers -->
+            <div id="tab-content">
+                <!-- 1. Timeline Chart -->
+                <div id="timeline-tab" class="tab-pane active-pane">
+                    <!-- Title and Buttons -->
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="text-2xl font-semibold text-primary">Active Sessions History (ASH) over Time</h2>
+                        <div class="flex space-x-2">
+                            <button id="expandGraphButton" class="text-sm px-3 py-1 bg-primary/20 hover:bg-primary/30 rounded-full transition duration-150 text-primary font-medium" disabled>Expand Graph</button>
+                            <button id="resetZoomButton" class="text-sm px-3 py-1 bg-gray-600/20 hover:bg-gray-600/30 rounded-full transition duration-150 text-gray-300 font-medium" disabled>Reset Zoom</button>
+                        </div>
+                    </div>
+                    <div class="relative chart-container" id="timelineChartContainer">
+                        <canvas id="ashChart"></canvas>
+                        <!-- Selection Overlay (Drill-Down Feature) -->
+                        <div id="selection-overlay" class="absolute top-0 left-0 h-full bg-yellow-400 opacity-30 hidden pointer-events-none rounded-lg" style="width: 0px;"></div>
+                    </div>
+                    <!-- Drill-Down Results Container (Default: Full Range Top SQL) -->
+                    <div id="drillDownContainer" class="mt-8 pt-4 border-t border-gray-700 hidden">
+                        <h3 id="drillDownTitle" class="text-xl font-semibold mb-3 text-yellow-400"></h3>
+                        <div id="drillDownTable" class="overflow-x-auto bg-gray-700/50 p-4 rounded-xl">
+                            <!-- Table content will be rendered here -->
+                        </div>
+                    </div>
+                </div>
+                <!-- 2. Wait Distribution Chart -->
+                <div id="wait-distribution-tab" class="tab-pane hidden">
+                    <h2 class="text-2xl font-semibold mb-4 text-primary">Total Wait Class Distribution</h2>
+                    <div class="flex justify-center items-center chart-container">
+                        <canvas id="waitDistributionChart" class="max-h-[60vh] max-w-sm"></canvas>
+                    </div>
+                </div>
+                <!-- 3. Top SQL IDs Chart and Detail Table -->
+                <div id="top-sql-tab" class="tab-pane hidden">
+                    <h2 class="text-2xl font-semibold mb-4 text-primary">Top 25 SQL IDs by ASH</h2>
+                    <div class="relative chart-container mb-8" style="height: 600px;">
+                        <canvas id="topSQLChart"></canvas>
+                    </div>
+                    <h3 class="text-xl font-semibold mb-3 text-gray-300">Top SQL Metadata and Performance</h3>
+                    <div id="topSqlTableContainer" class="overflow-x-auto bg-gray-700/50 p-4 rounded-xl">
+                        <p class="text-gray-400">Upload the optional SQL metadata file to see detailed SQL text, elapsed time, and execution metrics here.</p>
+                    </div>
+                </div>
+                <!-- 4. Top Modules Chart -->
+                <div id="top-modules-tab" class="tab-pane hidden">
+                    <h2 class="text-2xl font-semibold mb-4 text-primary">Top 25 Modules by ASH</h2>
+                    <div class="relative chart-container" style="height: 600px;">
+                        <canvas id="topModulesChart"></canvas>
+                    </div>
+                </div>
+                <!-- 5. Top Clients & Modules Table -->
+                <div id="top-clients-tab" class="tab-pane hidden">
+                    <h2 class="text-2xl font-semibold mb-4 text-primary">Top 25 Clients and their Top 3 Modules</h2>
+                    <div id="clientModuleTableContainer" class="overflow-x-auto">
+                        <!-- Table content will be rendered here -->
+                    </div>
+                </div>
+                <!-- 6. Concurrent Users Chart -->
+                <div id="concurrent-users-tab" class="tab-pane hidden">
+                    <h2 class="text-2xl font-semibold mb-4 text-primary">Concurrent Users per Hour</h2>
+                    <div class="relative chart-container" style="height: 600px;">
+                        <canvas id="concurrentUsersChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Slide-Over Drawer Component for Detailed Data -->
+    <!-- The backdrop is crucial for closing the drawer on outside click -->
+    <div id="drawerBackdrop" class="backdrop fixed inset-0 bg-black bg-opacity-40 z-40" onclick="closeDrawer()"></div>
+    <div id="dataDrawer" class="drawer-container fixed top-0 right-0 w-full max-w-lg h-full bg-gray-800 shadow-2xl z-50 overflow-y-auto">
+        <div class="flex flex-col h-full">
+            <!-- Header -->
+            <div class="p-6 border-b border-gray-700 sticky top-0 bg-gray-800 z-10 shadow-lg">
+                <div class="flex justify-between items-center">
+                    <h2 id="drawerTitle" class="text-2xl font-bold text-white"></h2>
+                    <button onclick="closeDrawer()" class="text-gray-400 hover:text-white p-1 transition">
+                        <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                    </button>
+                </div>
+                <p id="drawerSubtitle" class="text-sm text-primary mt-1"></p>
+            </div>
+            <!-- Content Body (Data List) -->
+            <div id="drawerContent" class="flex-grow p-6 space-y-4">
+                <!-- Data will be inserted here -->
+            </div>
+            <!-- Footer -->
+            <div class="p-4 border-t border-gray-700 bg-gray-900 sticky bottom-0">
+                <button onclick="closeDrawer()"
+                        class="w-full py-2 bg-primary/20 text-primary font-medium rounded-lg hover:bg-primary/30 transition duration-150">
+                    Close Panel
+                </button>
+            </div>
+        </div>
+    </div>
+    <script>
+        // --- CONSTANTS ---
+        const TIME_COL = "SAMPLE_TIME2";
+        const STATE_COL = "SESSION_STATE";
+        const WAIT_COL = "WAIT_CLASS";
+        const SQL_COL = "SQL_ID";
+        const MODULE_COL = "MODULE";
+        const ACTION_COL = "ACTION";
+        const CLIENT_COL = "CLIENT_ID";
+        const PLAN_OP_COL = "SQL_PLAN_OPERATION";
+        const PLAN_OPT_COL = "SQL_PLAN_OPTIONS";
+        const WAIT_TIME_COL = "WAIT_TIME";
+        const EVENT_COL = "EVENT";
+        // All columns requested for the drill-down detail
+        const DRILL_COLS = [
+            TIME_COL, STATE_COL, WAIT_COL, WAIT_TIME_COL, EVENT_COL,
+            SQL_COL, MODULE_COL, ACTION_COL, CLIENT_COL,
+            PLAN_OP_COL, PLAN_OPT_COL
+        ];
+        const REQUIRED_COLS = [TIME_COL, STATE_COL, WAIT_COL, SQL_COL, MODULE_COL, CLIENT_COL];
+        const SQL_META_COLS = ["SQL_ID", "SQL_TEXT", "ELAPSED_TIME", "EXECUTIONS"];
+        const TOP_N_COUNT = 25;
+        const TOP_MODULES_PER_CLIENT = 3;
+        const MICROSECONDS_PER_SECOND = 1000000;
+        const TOP_N_AGGREGATION = 3;
+        // --- GLOBAL STATE ---
+        let chartInstances = {};
+        let rawData = [];
+        let analysisResults = null;
+        let sqlDetailsMap = {};
+        let ashStatus = { message: 'Awaiting file.', isError: false };
+        let sqlStatus = { message: 'Not loaded.', isError: false };
+        let currentTimeRange = { start: null, end: null };
+        // Selection state for chart drill-down
+        const selection = { isDragging: false, startX: 0, endX: 0, startTimeMs: 0, endTimeMs: 0 };
+        const overlay = document.getElementById('selection-overlay');
+        const ashChartCanvas = document.getElementById('ashChart');
+        let myChart;
+        // Drawer elements
+        const drawer = document.getElementById('dataDrawer');
+        const backdrop = document.getElementById('drawerBackdrop');
+        const drawerContent = document.getElementById('drawerContent');
+        const drawerTitle = document.getElementById('drawerTitle');
+        const drawerSubtitle = document.getElementById('drawerSubtitle');
+        window.onload = function() {
+            document.getElementById('csvFileInput').addEventListener('change', handleFileSelect);
+            document.getElementById('sqlFileInput').addEventListener('change', handleSQLFileSelect);
+            document.getElementById('tab-nav').addEventListener('click', handleTabClick);
+            document.getElementById('expandGraphButton').addEventListener('click', toggleGraphExpansion);
+            document.getElementById('resetZoomButton').addEventListener('click', resetTimeRange);
+            refreshStatusDisplay();
+            setupChartSelection();
+            document.getElementById('tab-content').addEventListener('click', (e) => {
+                const row = e.target.closest('tr[data-sql-id]');
+                if (row) {
+                    const sqlId = row.dataset.sqlId;
+                    if (sqlId) {
+                        window.openSqlDetail(sqlId);
+                    }
+                }
+            });
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape' && drawer.classList.contains('open')) {
+                    closeDrawer();
+                }
+            });
+        };
+        // --- DRAWER UTILITIES ---
+        window.openDrawer = (title, subtitle, dataObject) => {
+            drawerTitle.textContent = title;
+            drawerSubtitle.textContent = subtitle;
+            renderDrawerData(dataObject);
+            drawer.classList.add('open');
+            backdrop.classList.add('open');
+        }
+        window.closeDrawer = () => {
+            drawer.classList.remove('open');
+            backdrop.classList.remove('open');
+        }
+        function formatKey(key) {
+            return key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+        }
+        function renderDrawerData(dataObject) {
+            drawerContent.innerHTML = '';
+            for (const [key, value] of Object.entries(dataObject)) {
+                if (value === null || value === undefined || value === '' || key === 'TIMESTAMP_MS' || key.startsWith('_')) continue;
+                const item = document.createElement('div');
+                item.className = 'grid grid-cols-1 md:grid-cols-3 gap-1 md:gap-4 border-b border-gray-700 py-3 last:border-b-0';
+                const keyElement = document.createElement('p');
+                keyElement.className = 'font-semibold text-gray-400 text-sm md:text-base col-span-1';
+                keyElement.textContent = formatKey(key);
+                const valueElement = document.createElement('p');
+                valueElement.className = `text-white break-words text-sm md:text-base col-span-2`;
+                if (Array.isArray(value)) {
+                    valueElement.className += ' space-y-2';
+                    if (value.length > 0) {
+                        value.forEach((metric, index) => {
+                            const metricDiv = document.createElement('div');
+                            metricDiv.className = 'flex justify-between items-center bg-gray-700/50 p-2 rounded-lg';
+                            const metricValue = metric.value.trim() === 'null' ? '(NULL)' : metric.value;
+                            metricDiv.innerHTML = `
+                                <span class="text-sm text-yellow-300 font-medium">${index + 1}. ${metricValue}</span>
+                                <span class="text-sm font-mono text-teal-400">${metric.count} samples</span>
+                            `;
+                            valueElement.appendChild(metricDiv);
+                        });
+                    } else {
+                        valueElement.textContent = 'N/A';
+                    }
+                } else if (key.includes('SQL_TEXT')) {
+                    valueElement.className += ' font-mono whitespace-pre-wrap text-sm bg-gray-700 p-2 rounded-lg';
+                    const valueText = (typeof value === 'string' && value.trim() === 'null') ? '(NULL)' : (value || '(NULL)');
+                    valueElement.textContent = valueText;
+                } else if (key.startsWith('---')) {
+                    keyElement.className = 'font-bold text-lg text-primary col-span-3 mt-4 mb-2 border-t pt-4 border-gray-600';
+                    keyElement.textContent = key.replace(/---/g, '').trim();
+                    valueElement.className = 'text-white font-semibold text-lg col-span-3';
+                    valueElement.textContent = value;
+                } else {
+                    const valueText = (typeof value === 'string' && value.trim() === 'null') ? '(NULL)' : (value || '(NULL)');
+                    valueElement.textContent = valueText;
+                }
+                item.appendChild(keyElement);
+                if (Array.isArray(value) || key.includes('SQL_TEXT') || key.startsWith('---')) {
+                    item.appendChild(valueElement);
+                } else {
+                    item.appendChild(valueElement);
+                }
+                drawerContent.appendChild(item);
+            }
+        }
+        // --- STATUS DISPLAY UTILITY ---
+        function refreshStatusDisplay(type, message, isError = false) {
+            if (type === 'ash') {
+                ashStatus = { message, isError };
+            } else if (type === 'sql') {
+                sqlStatus = { message, isError };
+            }
+            const statusMessageEl = document.getElementById('statusMessage');
+            let combinedText = `ASH Status: ${ashStatus.message} | SQL Metadata: ${sqlStatus.message}`;
+            let color = 'gray';
+            if (ashStatus.isError || sqlStatus.isError) {
+                color = 'red';
+            } else if (ashStatus.message.includes('Successfully') || sqlStatus.message.includes('Loaded')) {
+                color = 'green';
+            }
+            if (ashStatus.message.includes('Reading') || sqlStatus.message.includes('Reading')) {
+                color = 'yellow';
+            }
+            statusMessageEl.textContent = combinedText;
+            statusMessageEl.className = `mt-4 text-sm text-${color}-400`;
+        }
+        // --- DATE UTILITY ---
+        function parseOracleDate(dateString) {
+            if (!dateString || dateString.length !== 14) return null;
+            try {
+                const year = dateString.substring(0, 4);
+                const month = dateString.substring(4, 6);
+                const day = dateString.substring(6, 8);
+                const hour = dateString.substring(8, 10);
+                const minute = dateString.substring(10, 12);
+                const second = dateString.substring(12, 14);
+                return new Date(year, month - 1, day, hour, minute, second);
+            } catch (e) {
+                console.error("Error parsing date:", dateString, e);
+                return null;
+            }
+        }
+        function formatTimeWithSeconds(timestampMs) {
+            return new Date(timestampMs).toLocaleTimeString('en-US', {
+                hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+            });
+        }
+        // --- COLOR UTILITY ---
+        function getWaitClassColor(waitClass) {
+            switch (waitClass) {
+                case 'CPU': return 'rgb(187, 255, 187)';
+                case 'User I/O': return 'rgb(0, 0, 255)';
+                case 'System I/O': return 'rgb(0, 191, 255)';
+                case 'Concurrency': return 'rgb(0, 139, 139)';
+                case 'Application': return 'rgb(255, 0, 0)';
+                case 'Commit': return 'rgb(255, 165, 0)';
+                case 'Network': return 'rgb(255, 228, 196)';
+                case 'Scheduler': return 'rgb(255, 105, 180)';
+                case 'Configuration': return 'rgb(139, 69, 19)';
+                case 'Administrative': return 'rgb(220, 220, 220)';
+                case 'Queueing': return 'rgb(255, 235, 205)';
+                case 'Cluster': return 'rgb(255, 255, 224)';
+                case 'Other': return 'rgb(255, 182, 193)';
+                default: return 'rgb(108, 117, 125)';
+            }
+        }
+        function generateRandomColor() {
+            const r = Math.floor(Math.random() * 200) + 50;
+            const g = Math.floor(Math.random() * 200) + 50;
+            const b = Math.floor(Math.random() * 200) + 50;
+            return `rgb(${r}, ${g}, ${b})`;
+        }
+        // --- DATA PROCESSING LOGIC ---
+        function calculateTimelineData(data, bucketSizeSeconds = 1800, startTimeMs = null, endTimeMs = null) {
+            const grouped = new Map();
+            const allWaitClasses = new Set();
+            allWaitClasses.add('CPU');
+
+            data.forEach(sample => {
+                const dateString = sample[TIME_COL];
+                const dateObject = parseOracleDate(dateString);
+                if (!dateObject || isNaN(dateObject.getTime())) return;
+
+                sample.TIMESTAMP_MS = dateObject.getTime();
+                const timestamp = sample.TIMESTAMP_MS;
+
+                if (startTimeMs !== null && endTimeMs !== null) {
+                    if (timestamp < startTimeMs || timestamp > endTimeMs) return;
+                }
+
+                // Use larger buckets (e.g., 30 minutes) for multi-day data
+                const bucketKeyMs = Math.floor(timestamp / (bucketSizeSeconds * 1000)) * (bucketSizeSeconds * 1000);
+
+                let waitClass = 'Other';
+                if (sample[STATE_COL] === 'ON CPU') {
+                    waitClass = 'CPU';
+                } else if (sample[WAIT_COL] && sample[WAIT_COL] !== 'Idle') {
+                    waitClass = sample[WAIT_COL];
+                } else {
+                    return;
+                }
+
+                allWaitClasses.add(waitClass);
+
+                if (!grouped.has(bucketKeyMs)) {
+                    grouped.set(bucketKeyMs, {});
+                }
+
+                const bucket = grouped.get(bucketKeyMs);
+                bucket[waitClass] = (bucket[waitClass] || 0) + 1;
+            });
+
+            if (grouped.size === 0) return { labels: [], datasets: [] };
+
+            const timePoints = Array.from(grouped.keys()).sort((a, b) => a - b);
+            const sortedWaitClasses = Array.from(allWaitClasses).sort((a, b) => {
+                if (a === 'CPU') return -1; // CPU first (bottom)
+                if (b === 'CPU') return 1;
+                return a.localeCompare(b);
+            });
+
+            const datasets = sortedWaitClasses.map(cls => ({
+                label: cls,
+                data: timePoints.map(timeMs => ({ x: timeMs, y: grouped.get(timeMs)[cls] || 0 })),
+                backgroundColor: getWaitClassColor(cls),
+                borderColor: getWaitClassColor(cls),
+                fill: true,
+                tension: 0.3
+            }));
+
+            return { labels: timePoints, datasets: datasets };
+        }
+        function calculateConcurrentUsers(data) {
+            const hourlyCounts = {};
+            data.forEach(sample => {
+                const dateString = sample[TIME_COL];
+                const dateObject = parseOracleDate(dateString);
+                if (!dateObject || isNaN(dateObject.getTime())) return;
+
+                // Group by hour
+                const hourKey = dateObject.toISOString().substring(0, 13); // YYYY-MM-DDTHH
+                if (!hourlyCounts[hourKey]) {
+                    hourlyCounts[hourKey] = new Set();
+                }
+                const clientId = sample[CLIENT_COL] || '(NULL)';
+                hourlyCounts[hourKey].add(clientId);
+            });
+
+            // Convert to array and sort by hour
+            const sortedHours = Object.keys(hourlyCounts).sort();
+            const labels = sortedHours.map(hour => new Date(hour + ":00:00"));
+            const counts = sortedHours.map(hour => hourlyCounts[hour].size);
+
+            return { labels, counts };
+        }
+        function processDataAndRenderAllViews(newRawData) {
+            rawData = newRawData;
+            analysisResults = {
+                timeline: calculateTimelineData(rawData),
+                waitDistribution: calculateWaitDistribution(rawData),
+                topSQL: calculateTopMetrics(rawData, SQL_COL, TOP_N_COUNT),
+                topModules: calculateTopMetrics(rawData, MODULE_COL, TOP_N_COUNT),
+                topClients: calculateTopClientsAndModules(rawData, TOP_N_COUNT, TOP_MODULES_PER_CLIENT),
+                concurrentUsers: calculateConcurrentUsers(rawData) // Add this line
+            };
+
+            // Update the render calls
+            renderTimelineChart(analysisResults.timeline);
+            renderWaitDistributionChart(analysisResults.waitDistribution);
+            renderTopSqlChartAndDetails(analysisResults.topSQL);
+            renderTopBarChart('topModulesChart', analysisResults.topModules, 'Module');
+            renderClientModuleTable(analysisResults.topClients);
+            renderConcurrentUsersChart(analysisResults.concurrentUsers); // Add this line
+            renderDefaultFullRangeTable(rawData);
+
+            document.querySelectorAll('.tab-button').forEach(btn => btn.disabled = false);
+            document.getElementById('expandGraphButton').disabled = false;
+            document.getElementById('resetZoomButton').disabled = false;
+        }
+        function calculateFullRangeTopSqlSummary(data) {
+            const sqlSummary = {};
+            data.forEach(sample => {
+                const sqlId = sample[SQL_COL] || '(NULL)';
+                const module = sample[MODULE_COL] || '(NULL)';
+                if (!sqlSummary[sqlId]) {
+                    sqlSummary[sqlId] = { count: 0, modules: {} };
+                }
+                sqlSummary[sqlId].count++;
+                sqlSummary[sqlId].modules[module] = (sqlSummary[sqlId].modules[module] || 0) + 1;
+            });
+            return Object.keys(sqlSummary)
+                .map(sqlId => {
+                    const data = sqlSummary[sqlId];
+                    const topModule = Object.keys(data.modules).sort((a, b) => data.modules[b] - data.modules[a])[0];
+                    return {
+                        sqlId: sqlId,
+                        count: data.count,
+                        topModule: topModule
+                    };
+                })
+                .sort((a, b) => b.count - a.count)
+                .slice(0, TOP_N_COUNT);
+        }
+        function renderDefaultFullRangeTable(data) {
+            const summary = calculateFullRangeTopSqlSummary(data);
+            const totalCount = data.length;
+            const titleText = `Top ${summary.length} SQL IDs by ASH (Full Time Range, Total Samples: ${totalCount})`;
+            document.getElementById('drillDownTitle').textContent = titleText;
+            document.getElementById('drillDownContainer').classList.remove('hidden');
+            renderSqlSummaryTable(summary, totalCount, document.getElementById('drillDownTable'));
+        }
+        // --- CHART SELECTION LOGIC ---
+        function setupChartSelection() {
+            ashChartCanvas.addEventListener('mousedown', (e) => {
+                if (!myChart) return;
+                selection.isDragging = true;
+                selection.startX = e.offsetX;
+                selection.startTimeMs = myChart.scales.x.getValueForPixel(e.offsetX);
+                overlay.style.left = `${selection.startX}px`;
+                overlay.style.width = '0px';
+                overlay.classList.remove('hidden');
+                closeDrawer();
+            });
+            ashChartCanvas.addEventListener('mousemove', (e) => {
+                if (!selection.isDragging) return;
+                selection.endX = e.offsetX;
+                const minX = Math.min(selection.startX, selection.endX);
+                const width = Math.abs(selection.startX - selection.endX);
+                overlay.style.left = `${minX}px`;
+                overlay.style.width = `${width}px`;
+            });
+            ashChartCanvas.addEventListener('mouseup', (e) => {
+                if (!selection.isDragging) return;
+                selection.isDragging = false;
+                overlay.classList.add('hidden');
+                selection.endX = e.offsetX;
+                selection.endTimeMs = myChart.scales.x.getValueForPixel(e.offsetX);
+                const finalStartTimeMs = Math.min(selection.startTimeMs, selection.endTimeMs);
+                const finalEndTimeMs = Math.max(selection.startTimeMs, selection.endTimeMs);
+                if (finalEndTimeMs - finalStartTimeMs > 10000) {
+                    currentTimeRange = { start: finalStartTimeMs, end: finalEndTimeMs };
+                    showTimeRangeDetails(finalStartTimeMs, finalEndTimeMs);
+                } else {
+                    renderDefaultFullRangeTable(rawData);
+                }
+            });
+            ashChartCanvas.addEventListener('mouseleave', () => {
+                if (selection.isDragging && selection.startX !== selection.endX && myChart) {
+                    selection.isDragging = false;
+                    overlay.classList.add('hidden');
+                    selection.endTimeMs = myChart.scales.x.getValueForPixel(selection.endX);
+                    const finalStartTimeMs = Math.min(selection.startTimeMs, selection.endTimeMs);
+                    const finalEndTimeMs = Math.max(selection.startTimeMs, selection.endTimeMs);
+                    if (finalEndTimeMs - finalStartTimeMs > 10000) {
+                        currentTimeRange = { start: finalStartTimeMs, end: finalEndTimeMs };
+                        showTimeRangeDetails(finalStartTimeMs, finalEndTimeMs);
+                    }
+                } else if (selection.isDragging) {
+                    selection.isDragging = false;
+                    overlay.classList.add('hidden');
+                    renderDefaultFullRangeTable(rawData);
+                }
+            });
+        }
+        function showTimeRangeDetails(startTimeMs, endTimeMs) {
+            const filteredData = calculateTimelineData(rawData, 1800, startTimeMs, endTimeMs);
+            renderTimelineChart(filteredData);
+            const allFilteredData = rawData.filter(sample =>
+                sample.TIMESTAMP_MS >= startTimeMs && sample.TIMESTAMP_MS <= endTimeMs
+            );
+            const sqlSummary = {};
+            allFilteredData.forEach(sample => {
+                const sqlId = sample[SQL_COL] || '(NULL)';
+                const module = sample[MODULE_COL] || '(NULL)';
+                if (!sqlSummary[sqlId]) {
+                    sqlSummary[sqlId] = { count: 0, modules: {} };
+                }
+                sqlSummary[sqlId].count++;
+                sqlSummary[sqlId].modules[module] = (sqlSummary[sqlId].modules[module] || 0) + 1;
+            });
+            const topSqlSummary = Object.keys(sqlSummary)
+                .map(sqlId => {
+                    const data = sqlSummary[sqlId];
+                    const topModule = Object.keys(data.modules).sort((a, b) => data.modules[b] - data.modules[a])[0];
+                    return {
+                        sqlId: sqlId,
+                        count: data.count,
+                        topModule: topModule
+                    };
+                })
+                .sort((a, b) => b.count - a.count)
+                .slice(0, TOP_N_COUNT);
+            renderTimeRangeTable(topSqlSummary, allFilteredData.length, startTimeMs, endTimeMs);
+        }
+        function renderTimeRangeTable(summaryData, totalFilteredCount, startMs, endMs) {
+            const titleEl = document.getElementById('drillDownTitle');
+            const tableEl = document.getElementById('drillDownTable');
+            const container = document.getElementById('drillDownContainer');
+            const startTime = formatTimeWithSeconds(startMs);
+            const endTime = formatTimeWithSeconds(endMs);
+            const titleText = `Top ${summaryData.length} SQL IDs by ASH (${startTime} - ${endTime}, Total Samples: ${totalFilteredCount})`;
+            titleEl.textContent = titleText;
+            container.classList.remove('hidden');
+            renderSqlSummaryTable(summaryData, totalFilteredCount, tableEl);
+        }
+        function renderSqlSummaryTable(summaryData, totalCount, tableEl) {
+            if (summaryData.length === 0) {
+                tableEl.innerHTML = '<p class="text-gray-400">No active SQL IDs found in the selected time range.</p>';
+                return;
+            }
+            const hasSqlMeta = Object.keys(sqlDetailsMap).length > 0;
+            let html = `
+                <table class="min-w-full divide-y divide-gray-700 sql-drill-table">
+                    <thead class="bg-gray-700">
+                        <tr>
+                            <th scope="col" class="px-3 py-2 text-left text-xs font-medium text-white uppercase tracking-wider">Rank</th>
+                            <th scope="col" class="px-3 py-2 text-left text-xs font-medium text-white uppercase tracking-wider">SQL ID</th>
+                            <th scope="col" class="px-3 py-2 text-left text-xs font-medium text-white uppercase tracking-wider">Top Module</th>
+                            <th scope="col" class="px-3 py-2 text-right text-xs font-medium text-white uppercase tracking-wider">ASH (Samples)</th>
+                            <th scope="col" class="px-3 py-2 text-left text-xs font-medium text-white uppercase tracking-wider">AET/Exec (s)</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-700">
+            `;
+            summaryData.forEach((item, index) => {
+                const sqlId = item.sqlId;
+                const sqlDetail = sqlDetailsMap[sqlId] || {};
+                const percentage = totalCount > 0 ? ((item.count / totalCount) * 100).toFixed(1) : '0.0';
+                const metricDisplay = hasSqlMeta
+                    ? `<span class="font-mono text-teal-400">${sqlDetail.avg_elapsed_time_sec || 'N/A'}</span>`
+                    : '<span class="text-gray-500">N/A</span>';
+                html += `
+                    <tr class="hover:bg-gray-700 transition duration-150 cursor-pointer" data-sql-id="${sqlId}">
+                        <td class="px-3 py-2 whitespace-nowrap text-sm font-medium text-white">${index + 1}</td>
+                        <td class="px-3 py-2 whitespace-nowrap text-sm text-blue-400 font-mono">${sqlId}</td>
+                        <td class="px-3 py-2 whitespace-nowrap text-sm text-gray-300">${item.topModule || '(NULL)'}</td>
+                        <td class="px-3 py-2 whitespace-nowrap text-sm text-right font-bold text-teal-400">
+                            ${item.count} <span class="text-xs text-gray-400">(${percentage}%)</span>
+                        </td>
+                        <td class="px-3 py-2 text-sm text-left">
+                            <div class="flex flex-col items-start">
+                                ${metricDisplay}
+                                <span class="text-xs text-primary/70 hover:text-primary transition duration-150">
+                                    View Details
+                                </span>
+                            </div>
+                        </td>
+                    </tr>
+                `;
+            });
+            html += `
+                    </tbody>
+                </table>
+            `;
+            tableEl.innerHTML = html;
+        }
+        function resetTimeRange() {
+            currentTimeRange = { start: null, end: null };
+            renderTimelineChart(calculateTimelineData(rawData));
+            renderDefaultFullRangeTable(rawData);
+        }
+        // --- CHART & TABLE RENDERING ---
+        function destroyChart(chartId) {
+            if (chartInstances[chartId]) {
+                chartInstances[chartId].destroy();
+                delete chartInstances[chartId];
+            }
+        }
+        function toggleGraphExpansion() {
+            const container = document.getElementById('timelineChartContainer');
+            const button = document.getElementById('expandGraphButton');
+            const isExpanded = container.classList.toggle('chart-container-expanded');
+            button.textContent = isExpanded ? 'Shrink Graph' : 'Expand Graph';
+            if (chartInstances.ashChart) {
+                setTimeout(() => chartInstances.ashChart.resize(), 100);
+            }
+        }
+        function renderTimelineChart(chartData) {
+            destroyChart('ashChart');
+            const ctx = ashChartCanvas.getContext('2d');
+            myChart = chartInstances.ashChart = new Chart(ctx, {
+                type: 'line',
+                data: chartData,
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { position: 'top', labels: { color: '#e5e7eb' } },
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false,
+                            callbacks: {
+                                title: (tooltipItems) => {
+                                    if (tooltipItems.length === 0) return '';
+                                    const timestamp = tooltipItems[0].parsed.x;
+                                    return new Date(timestamp).toLocaleString('en-US', {
+                                        year: 'numeric', month: 'short', day: 'numeric',
+                                        hour: '2-digit', minute: '2-digit', hour12: false
+                                    });
+                                },
+                                footer: (tooltipItems) => {
+                                    let total = tooltipItems.reduce((sum, item) => sum + item.parsed.y, 0);
+                                    return 'Total Active Sessions: ' + total;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: {
+                                unit: 'hour',
+                                tooltipFormat: 'MMM d, yyyy HH:mm',
+                                displayFormats: {
+                                    hour: 'MMM d, HH:mm',
+                                    day: 'MMM d'
+                                },
+                                minUnit: 'hour'
+                            },
+                            stacked: false,
+                            title: { display: true, text: 'Sample Time', color: '#9ca3af' },
+                            grid: { color: '#374151' },
+                            ticks: {
+                                color: '#e5e7eb',
+                                autoSkip: true,
+                                maxTicksLimit: 20
+                            }
+                        },
+                        y: {
+                            stacked: true,
+                            title: { display: true, text: 'Active Sessions (Count)', color: '#9ca3af' },
+                            beginAtZero: true,
+                            grid: { color: '#374151' },
+                            ticks: { color: '#e5e7eb' }
+                        }
+                    },
+                    elements: {
+                        line: {
+                            tension: 0.3,
+                            fill: 'start',
+                            borderWidth: 1.5
+                        },
+                        point: {
+                            radius: 0,
+                            hitRadius: 5,
+                            hoverRadius: 3
+                        }
+                    }
+                }
+            });
+        }
+        function calculateWaitDistribution(data) {
+            const counts = {};
+            data.forEach(sample => {
+                let waitClass = 'Other';
+                if (sample[STATE_COL] === 'ON CPU') {
+                    waitClass = 'CPU';
+                } else if (sample[WAIT_COL] && sample[WAIT_COL] !== 'Idle') {
+                    waitClass = sample[WAIT_COL];
+                } else {
+                    return;
+                }
+                counts[waitClass] = (counts[waitClass] || 0) + 1;
+            });
+            const labels = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
+            const totalSamples = labels.reduce((sum, label) => sum + counts[label], 0);
+            return {
+                labels: labels.map(label => `${label} (${((counts[label] / totalSamples) * 100).toFixed(1)}%)`),
+                counts: labels.map(label => counts[label]),
+                colors: labels.map(getWaitClassColor)
+            };
+        }
+        function renderWaitDistributionChart(data) {
+            destroyChart('waitDistributionChart');
+            const ctx = document.getElementById('waitDistributionChart').getContext('2d');
+            const chartData = {
+                labels: data.labels,
+                datasets: [{
+                    data: data.counts,
+                    backgroundColor: data.colors,
+                    hoverOffset: 10,
+                }]
+            };
+            const options = {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'right',
+                        labels: { color: '#e5e7eb' }
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                let label = context.label || '';
+                                let value = context.parsed;
+                                return `${label}: ${value} samples`;
+                            }
+                        }
+                    }
+                }
+            };
+            chartInstances.waitDistributionChart = new Chart(ctx, { type: 'pie', data: chartData, options: options });
+        }
+        function calculateTopMetrics(data, colName, topN) {
+            const counts = {};
+            data.forEach(sample => {
+                const key = sample[colName] || '(NULL)';
+                counts[key] = (counts[key] || 0) + 1;
+            });
+            const sorted = Object.keys(counts)
+                .map(key => ({ label: key, count: counts[key] }))
+                .sort((a, b) => b.count - a.count);
+            return sorted.slice(0, topN);
+        }
+        function renderTopBarChart(chartId, data, title) {
+            destroyChart(chartId);
+            const ctx = document.getElementById(chartId).getContext('2d');
+            const labels = data.map(d => d.label);
+            const counts = data.map(d => d.count);
+            const colors = labels.map((_, i) => generateRandomColor());
+            const chartData = {
+                labels: labels,
+                datasets: [{
+                    label: 'Active Sessions Count',
+                    data: counts,
+                    backgroundColor: colors,
+                    borderColor: 'rgba(255, 255, 255, 0.2)',
+                    borderWidth: 1
+                }]
+            };
+            const options = {
+                responsive: true,
+                maintainAspectRatio: false,
+                indexAxis: 'y',
+                plugins: {
+                    legend: { display: false },
+                    tooltip: { mode: 'index', intersect: false }
+                },
+                scales: {
+                    x: {
+                        title: { display: true, text: 'Active Sessions (Count)', color: '#9ca3af' },
+                        grid: { color: '#374151' },
+                        ticks: { color: '#e5e7eb' },
+                        beginAtZero: true
+                    },
+                    y: {
+                        title: { display: true, text: title, color: '#9ca3af' },
+                        grid: { color: '#374151' },
+                        ticks: {
+                            color: '#e5e7eb',
+                            autoSkip: false,
+                            maxRotation: 0,
+                            minRotation: 0,
+                            padding: 5
+                        }
+                    }
+                }
+            };
+            chartInstances[chartId] = new Chart(ctx, { type: 'bar', data: chartData, options: options });
+        }
+        function renderConcurrentUsersChart(data) {
+            destroyChart('concurrentUsersChart');
+            const ctx = document.getElementById('concurrentUsersChart').getContext('2d');
+            const chartData = {
+                labels: data.labels,
+                datasets: [{
+                    label: 'Distinct Clients per Hour',
+                    data: data.counts,
+                    backgroundColor: 'rgba(79, 70, 229, 0.5)',
+                    borderColor: 'rgba(79, 70, 229, 1)',
+                    borderWidth: 1.5,
+                    tension: 0.3,
+                    fill: true
+                }]
+            };
+
+            const options = {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    x: {
+                        type: 'time',
+                        time: {
+                            unit: 'hour',
+                            tooltipFormat: 'MMM d, yyyy HH:00',
+                            displayFormats: {
+                                hour: 'MMM d, HH:00'
+                            },
+                            minUnit: 'hour'
+                        },
+                        title: { display: true, text: 'Hour', color: '#9ca3af' },
+                        grid: { color: '#374151' },
+                        ticks: {
+                            color: '#e5e7eb',
+                            autoSkip: true,
+                            maxTicksLimit: 20
+                        }
+                    },
+                    y: {
+                        title: { display: true, text: 'Distinct Clients', color: '#9ca3af' },
+                        beginAtZero: true,
+                        grid: { color: '#374151' },
+                        ticks: { color: '#e5e7eb' }
+                    }
+                },
+                plugins: {
+                    legend: { labels: { color: '#e5e7eb' } },
+                    tooltip: { mode: 'index', intersect: false }
+                }
+            };
+
+            chartInstances.concurrentUsersChart = new Chart(ctx, {
+                type: 'line',
+                data: chartData,
+                options: options
+            });
+        }
+        function renderTopSqlChartAndDetails(topSQLData) {
+            renderTopBarChart('topSQLChart', topSQLData, 'SQL ID');
+            const container = document.getElementById('topSqlTableContainer');
+            if (topSQLData.length === 0) {
+                container.innerHTML = '<p class="text-gray-400">No SQL data available to display.</p>';
+                return;
+            }
+            const hasSqlMeta = Object.keys(sqlDetailsMap).length > 0;
+            let html = `
+                ${!hasSqlMeta ? '<p class="text-yellow-400 mb-4 font-medium p-3 bg-gray-900 rounded">SQL metadata file is not loaded. Showing only ASH counts. Load the SQL file for full AET and SQL text details!</p>' : ''}
+                <table class="min-w-full divide-y divide-gray-700 rounded-xl overflow-hidden">
+                    <thead class="bg-primary/20">
+                        <tr>
+                            <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-primary uppercase tracking-wider">Rank</th>
+                            <th scope="col" class="px-4 py-3 text-left text-xs font-medium text-primary uppercase tracking-wider">SQL ID</th>
+                            <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-primary uppercase tracking-wider">ASH (Samples)</th>
+                            <th scope="col" class="px-4 py-3 text-right text-xs font-medium text-primary uppercase tracking-wider">
+                                AET/Exec (s)
+                            </th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-700">
+            `;
+            topSQLData.forEach((item, index) => {
+                const sqlId = item.label;
+                const sqlDetail = sqlDetailsMap[sqlId] || {};
+                const metricDisplay = hasSqlMeta
+                    ? `<span class="font-mono text-teal-400">${sqlDetail.avg_elapsed_time_sec || 'N/A'}</span>`
+                    : '<span class="text-gray-500">N/A</span>';
+                html += `
+                    <tr class="hover:bg-gray-700 transition duration-150 cursor-pointer" data-sql-id="${sqlId}">
+                        <td class="px-4 py-3 whitespace-nowrap text-sm font-medium text-white">${index + 1}</td>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm text-blue-400 font-mono">${sqlId}</td>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm text-right font-bold text-teal-400">${item.count}</td>
+                        <td class="px-4 py-3 text-sm text-right">
+                            <div class="flex flex-col items-end">
+                                ${metricDisplay}
+                                ${hasSqlMeta ? `<span class="text-xs text-primary/70 mt-1">View SQL Text/Details</span>` : ''}
+                            </div>
+                        </td>
+                    </tr>
+                `;
+            });
+            html += `
+                    </tbody>
+                </table>
+            `;
+            container.innerHTML = html;
+        }
+        function calculateTopClientsAndModules(data, topN, moduleN) {
+            const clientData = {};
+            data.forEach(sample => {
+                const client = sample[CLIENT_COL] || '(NULL)';
+                const module = sample[MODULE_COL] || '(NULL)';
+                if (!clientData[client]) {
+                    clientData[client] = { total: 0, modules: {} };
+                }
+                clientData[client].total++;
+                clientData[client].modules[module] = (clientData[client].modules[module] || 0) + 1;
+            });
+            const sortedClients = Object.keys(clientData)
+                .map(client => ({
+                    client,
+                    total: clientData[client].total,
+                    modules: clientData[client].modules
+                }))
+                .sort((a, b) => b.total - a.total)
+                .slice(0, topN);
+            return sortedClients.map(clientEntry => {
+                const sortedModules = Object.keys(clientEntry.modules)
+                    .map(module => ({
+                        module,
+                        count: clientEntry.modules[module]
+                    }))
+                    .sort((a, b) => b.count - a.count)
+                    .slice(0, moduleN);
+                return {
+                    client: clientEntry.client,
+                    total: clientEntry.total,
+                    topModules: sortedModules
+                };
+            });
+        }
+        function renderClientModuleTable(data) {
+            const container = document.getElementById('clientModuleTableContainer');
+            if (data.length === 0) {
+                container.innerHTML = '<p class="text-gray-400">No client data available to display.</p>';
+                return;
+            }
+            let html = `
+                <table class="min-w-full divide-y divide-gray-700 rounded-xl overflow-hidden">
+                    <thead class="bg-primary/20">
+                        <tr>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-primary uppercase tracking-wider">Rank</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-primary uppercase tracking-wider">Client ID</th>
+                            <th scope="col" class="px-6 py-3 text-right text-xs font-medium text-primary uppercase tracking-wider">Total Samples (ASH)</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-primary uppercase tracking-wider">Top ${TOP_MODULES_PER_CLIENT} Modules (Samples)</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-700">
+            `;
+            data.forEach((item, index) => {
+                const totalSamples = rawData.length;
+                const totalPercent = totalSamples > 0 ? ((item.total / totalSamples) * 100).toFixed(1) : '0.0';
+                const moduleList = item.topModules.map(mod =>
+                    `<span class="bg-gray-700 text-gray-200 text-xs font-medium mr-2 px-2.5 py-0.5 rounded">${mod.module}: ${mod.count}</span>`
+                ).join('');
+                html += `
+                    <tr class="hover:bg-gray-700 transition duration-150">
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-white">${index + 1}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-300">${item.client}</td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-right font-bold text-teal-400">${item.total} <span class="text-xs text-gray-400">(${totalPercent}%)</span></td>
+                        <td class="px-6 py-4 text-sm text-gray-300">${moduleList}</td>
+                    </tr>
+                `;
+            });
+            html += `
+                    </tbody>
+                </table>
+            `;
+            container.innerHTML = html;
+        }
+        // --- FILE HANDLING & TAB SWITCHING ---
+        function handleSQLFileSelect(event) {
+            const file = event.target.files[0];
+            if (!file) {
+                sqlDetailsMap = {};
+                refreshStatusDisplay('sql', 'Not loaded.');
+                if (analysisResults) {
+                    renderTopSqlChartAndDetails(analysisResults.topSQL);
+                    renderDefaultFullRangeTable(rawData);
+                }
+                return;
+            }
+            refreshStatusDisplay('sql', `Reading file: ${file.name}...`);
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const text = e.target.result;
+                const firstLine = text.split('\n')[0] || '';
+                const delimiter = (firstLine.match(/;/g) || []).length > 0 ? ';' : ',';
+                Papa.parse(text, {
+                    header: true,
+                    dynamicTyping: true,
+                    skipEmptyLines: true,
+                    delimiter: delimiter,
+                    complete: function(results) {
+                        if (results.errors.length) {
+                            sqlDetailsMap = {};
+                            refreshStatusDisplay('sql', `Error parsing: ${results.errors[0].message}`, true);
+                            return;
+                        }
+                        const actualCols = Object.keys(results.data[0] || {});
+                        const missingCols = SQL_META_COLS.filter(col => !actualCols.includes(col));
+                        if (missingCols.length > 0) {
+                            sqlDetailsMap = {};
+                            refreshStatusDisplay('sql', `Error: Missing columns ${missingCols.join(', ')}`, true);
+                            return;
+                        }
+                        const data = results.data.filter(row => row.SQL_ID);
+                        sqlDetailsMap = data.reduce((map, row) => {
+                            const elapsed_time_micro = parseFloat(row.ELAPSED_TIME) || 0;
+                            const executions = parseInt(row.EXECUTIONS) || 1;
+                            let avg_elapsed_time_sec = 'N/A';
+                            if (executions > 0) {
+                                const elapsed_time_sec = elapsed_time_micro / MICROSECONDS_PER_SECOND;
+                                avg_elapsed_time_sec = (elapsed_time_sec / executions).toFixed(5);
+                            }
+                            map[row.SQL_ID] = {
+                                text: (row.SQL_TEXT || '(No SQL Text)').trim(),
+                                elapsed_time: elapsed_time_micro,
+                                executions: executions,
+                                avg_elapsed_time_sec: avg_elapsed_time_sec
+                            };
+                            return map;
+                        }, {});
+                        refreshStatusDisplay('sql', `Loaded ${data.length} records. (Delimiter: ${delimiter})`);
+                        if (analysisResults) {
+                            renderTopSqlChartAndDetails(analysisResults.topSQL);
+                            renderDefaultFullRangeTable(rawData);
+                        }
+                    }
+                });
+            };
+            reader.onerror = function() {
+                refreshStatusDisplay('sql', 'Error reading file.', true);
+            };
+            reader.readAsText(file);
+        }
+        function handleFileSelect(event) {
+            analysisResults = null;
+            document.querySelectorAll('.tab-button').forEach(btn => btn.disabled = true);
+            document.getElementById('expandGraphButton').disabled = true;
+            document.getElementById('resetZoomButton').disabled = true;
+            document.getElementById('drillDownContainer').classList.add('hidden');
+            const file = event.target.files[0];
+            if (!file) {
+                refreshStatusDisplay('ash', 'Awaiting file.');
+                return;
+            }
+            refreshStatusDisplay('ash', `Reading file: ${file.name}...`);
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const text = e.target.result;
+                const firstLine = text.split('\n')[0] || '';
+                const commaCount = (firstLine.match(/,/g) || []).length;
+                const semicolonCount = (firstLine.match(/;/g) || []).length;
+                let delimiter = '';
+                let detectedDelimiterName;
+                if (semicolonCount > commaCount && semicolonCount > 0) {
+                    delimiter = ';';
+                    detectedDelimiterName = '; (semicolon)';
+                } else if (commaCount > 0) {
+                    delimiter = ',';
+                    detectedDelimiterName = ', (comma)';
+                } else {
+                    delimiter = ',';
+                    detectedDelimiterName = 'Auto-detected (defaulting to comma)';
+                }
+                console.log(`Detected ASH delimiter: ${detectedDelimiterName}`);
+                Papa.parse(text, {
+                    header: true,
+                    dynamicTyping: false,
+                    skipEmptyLines: true,
+                    delimiter: delimiter,
+                    complete: function(results) {
+                        if (results.errors.length) {
+                            console.error("PapaParse Errors:", results.errors);
+                            refreshStatusDisplay('ash', `Error parsing CSV: ${results.errors[0].message}`, true);
+                            return;
+                        }
+                        const rawData = results.data.filter(row => Object.values(row).some(v => v !== null && v !== ''));
+                        const actualCols = Object.keys(rawData[0] || {});
+                        const missingRequiredCols = REQUIRED_COLS.filter(col => !actualCols.includes(col));
+                        if (rawData.length === 0) {
+                            refreshStatusDisplay('ash', `Error: CSV file is empty.`, true);
+                            return;
+                        }
+                        if (missingRequiredCols.length > 0) {
+                            refreshStatusDisplay('ash', `Error: Missing required columns: ${missingRequiredCols.join(', ')}.`, true);
+                            return;
+                        }
+                        const missingOptionalCols = DRILL_COLS.filter(col => !actualCols.includes(col));
+                        if (missingOptionalCols.length > 0) {
+                            console.warn(`ASH Warning: Missing optional drill-down columns: ${missingOptionalCols.join(', ')}. Detail view fields will be NULL.`);
+                        }
+                        processDataAndRenderAllViews(rawData);
+                        setActiveTab('timeline');
+                        const ashMsg = analysisResults.timeline.labels.length === 0
+                            ? `Data loaded, but no valid samples found.`
+                            : `Successfully loaded and analyzed ${rawData.length} samples. (Delimiter: ${detectedDelimiterName})`;
+                        refreshStatusDisplay('ash', ashMsg, analysisResults.timeline.labels.length === 0);
+                    }
+                });
+            };
+            reader.onerror = function() {
+                refreshStatusDisplay('ash', 'Error reading file.', true);
+            };
+            reader.readAsText(file);
+        }
+        function handleTabClick(event) {
+            const button = event.target.closest('.tab-button');
+            if (button && !button.disabled) {
+                const tabId = button.dataset.tab;
+                setActiveTab(tabId);
+            }
+        }
+        function setActiveTab(tabId) {
+            document.querySelectorAll('.tab-button').forEach(btn => {
+                btn.classList.remove('active-tab', 'text-white', 'border-primary', 'border-b-2');
+                btn.classList.add('text-gray-400', 'hover:text-white', 'border-transparent', 'hover:border-gray-500', 'border-b-2');
+            });
+            document.querySelectorAll('.tab-pane').forEach(pane => {
+                pane.classList.add('hidden');
+                pane.classList.remove('active-pane');
+            });
+            const activeButton = document.querySelector(`.tab-button[data-tab="${tabId}"]`);
+            const activePane = document.getElementById(`${tabId}-tab`);
+            if (activeButton) {
+                activeButton.classList.add('active-tab', 'text-white', 'border-primary');
+                activeButton.classList.remove('text-gray-400', 'hover:text-white', 'border-transparent', 'hover:border-gray-500');
+            }
+            if (activePane) {
+                activePane.classList.remove('hidden');
+                activePane.classList.add('active-pane');
+            }
+        }
+        // Exposed global function for viewing SQL metadata (used by Drill-Down and Top SQL tabs)
+        window.openSqlDetail = (sqlId) => {
+            const sqlDetail = sqlDetailsMap[sqlId];
+            // 1. Get Aggregated Metrics
+            const aggregatedMetrics = getTopMetricsForSql(sqlId);
+            // 2. Standard Metadata
+            let detailData = { 'SQL_ID': sqlId };
+            let subtitle = 'Metadata Unavailable';
+            if (sqlDetail) {
+                detailData = {
+                    'SQL_ID': sqlId,
+                    'Total Elapsed Time (s)': (sqlDetail.elapsed_time / MICROSECONDS_PER_SECOND).toFixed(3),
+                    'Total Executions': sqlDetail.executions,
+                    'Avg Elapsed Time per Exec (s)': sqlDetail.avg_elapsed_time_sec,
+                    'SQL_TEXT': sqlDetail.text
+                }
+                subtitle = `AET/Exec: ${sqlDetail.avg_elapsed_time_sec} s`;
+            } else {
+                 detailData['Message'] = 'SQL metadata for this ID was not found in the optional file.';
+            }
+            // 3. Merge Aggregated Metrics
+            detailData['--- ASH Sample Aggregates ---'] = `Total Samples: ${aggregatedMetrics.totalSamples}`;
+            // Merge the top N lists directly into detailData
+            Object.keys(aggregatedMetrics).forEach(key => {
+                if (key.startsWith('Top')) {
+                    detailData[key] = aggregatedMetrics[key];
+                }
+            });
+            // Open the drawer
+            const title = `SQL Detail: ${sqlId}`;
+            openDrawer(title, subtitle, detailData);
+        }
+        // New helper function to filter all samples for a given SQL ID and aggregate the top N metrics.
+        window.getTopMetricsForSql = (sqlId, topN = TOP_N_AGGREGATION) => {
+            // Columns requested by user, replacing WAIT_TIME with EVENT_COL for meaningful aggregation
+            const TOP_METRIC_COLS = [WAIT_COL, EVENT_COL, PLAN_OP_COL, PLAN_OPT_COL, MODULE_COL, ACTION_COL, CLIENT_COL];
+            // 1. Filter samples belonging to this SQL ID
+            const sqlSamples = rawData.filter(sample => sample[SQL_COL] === sqlId);
+            const aggregatedMetrics = {
+                totalSamples: sqlSamples.length
+            };
+            // 2. Aggregate counts for each target column
+            TOP_METRIC_COLS.forEach(col => {
+                const counts = {};
+                sqlSamples.forEach(sample => {
+                    // Use a fallback for null/undefined values
+                    const value = sample[col] || '(NULL)';
+                    counts[value] = (counts[value] || 0) + 1;
+                });
+                // 3. Sort and take top N
+                const sortedMetrics = Object.keys(counts)
+                    .map(value => ({ value: value, count: counts[value] }))
+                    .sort((a, b) => b.count - a.count)
+                    .slice(0, topN);
+                // Store in the aggregated result, adjusting the key name for display
+                aggregatedMetrics[`Top ${topN} ${formatKey(col)}`] = sortedMetrics;
+            });
+            return aggregatedMetrics;
+        }
+    </script>
+</body>
+</html>
