@@ -74,7 +74,7 @@ SELECT
 FROM
     DBA_HIST_ACTIVE_SESS_HISTORY
 WHERE
-    sample_time BETWEEN TO_TIMESTAMP('2025-10-27 00:00:00', 'YYYY-MM-DD HH24\:MI\:SS') AND TO_TIMESTAMP('2025-10-31 23:59:00', 'YYYY-MM-DD HH24\:MI\:SS');
+    sample_time BETWEEN TO_TIMESTAMP('2025-10-27 00:00:00', 'YYYY-MM-DD HH24:MI:SS') AND TO_TIMESTAMP('2025-10-31 23:59:00', 'YYYY-MM-DD HH24:MI:SS');
 ```
 
 ### Script 3: Generate SQL Data (Optional but Recommended)
@@ -94,7 +94,7 @@ SELECT DISTINCT
 FROM
     v\$sql s
 WHERE
-    s.sql_id IN (SELECT DISTINCT ash.sql_id FROM v\$active_session_history ash);
+    s.sql_id IN (SELECT DISTINCT ash.sql_id FROM v$active_session_history ash);
 ```
 **Note:** Save the output of this script as `sql_data.csv` for additional details in the tool.
 
