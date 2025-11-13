@@ -417,7 +417,7 @@
             return `rgb(${r}, ${g}, ${b})`;
         }
         // --- DATA PROCESSING LOGIC ---
-        function calculateTimelineData(data, bucketSizeSeconds = 1800, startTimeMs = null, endTimeMs = null) {
+        function calculateTimelineData(data, bucketSizeSeconds = 180, startTimeMs = null, endTimeMs = null) {
             const grouped = new Map();
             const allWaitClasses = new Set();
             allWaitClasses.add('CPU');
@@ -609,7 +609,7 @@
             });
         }
         function showTimeRangeDetails(startTimeMs, endTimeMs) {
-            const filteredData = calculateTimelineData(rawData, 1800, startTimeMs, endTimeMs);
+            const filteredData = calculateTimelineData(rawData, 60, startTimeMs, endTimeMs);
             renderTimelineChart(filteredData);
             const allFilteredData = rawData.filter(sample =>
                 sample.TIMESTAMP_MS >= startTimeMs && sample.TIMESTAMP_MS <= endTimeMs
@@ -1309,4 +1309,5 @@
         }
     </script>
 </body>
+
 </html>
